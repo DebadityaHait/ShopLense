@@ -1,0 +1,13 @@
+node_modules
+.next
+*.log
+.env
+!.env.example
+.playwright-cli
+.tmp-zepto-assets
+tsconfig.tsbuildinfo
+swiggy_cookie.txt
+swiggy_matcher.txt
+swiggy_location.json
+*_output.json
+swiggy_output_*.json

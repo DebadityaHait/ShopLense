@@ -1,0 +1,171 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Vendor {
+  ZEPTO
+  BLINKIT
+  FLIPKART
+  SWIGGY
+}
+
+enum SearchStatus {
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum AlertScope {
+  GROUP
+  LISTING
+}
+
+enum AlertRuleType {
+  PRICE_BELOW
+  DROP_PERCENT
+  LOWEST_BELOW
+  BACK_IN_STOCK
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model User {
+  id                String             @id @default(cuid())
+  email             String             @unique
+  passwordHash      String
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  searchRuns        SearchRun[]
+  alerts            Alert[]
+  alertEvents       AlertEvent[]
+  pushSubscriptions PushSubscription[]
+}
+
+model SearchRun {
+  id          String            @id @default(cuid())
+  userId      String?
+  user        User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  query       String
+  lat         Float
+  lon         Float
+  pincode     String
+  vendors     Vendor[]
+  status      SearchStatus
+  errors      Json?
+  createdAt   DateTime          @default(now())
+  snapshots   ProductSnapshot[]
+  groups      ProductGroup[]
+}
+
+model ProductSnapshot {
+  id             String        @id @default(cuid())
+  searchRunId    String
+  searchRun      SearchRun     @relation(fields: [searchRunId], references: [id], onDelete: Cascade)
+  groupId        String?
+  group          ProductGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  vendor         Vendor
+  vendorProductId String
+  name           String
+  brand          String?
+  quantity       String?
+  imageUrl       String?
+  mrp            Decimal?      @db.Decimal(10, 2)
+  offerPrice     Decimal?      @db.Decimal(10, 2)
+  available      Boolean
+  deeplink       String?
+  rating         Float?
+  ratingCount    Int?
+  inventory      Int?
+  sla            String?
+  raw            Json
+  createdAt      DateTime      @default(now())
+
+  @@index([vendor, vendorProductId])
+  @@index([searchRunId])
+}
+
+model ProductGroup {
+  id              String             @id @default(cuid())
+  searchRunId     String
+  searchRun       SearchRun          @relation(fields: [searchRunId], references: [id], onDelete: Cascade)
+  canonicalName   String
+  brand           String?
+  quantity        String?
+  normalizedKey   String
+  confidence      Float
+  lowestPrice     Decimal?           @db.Decimal(10, 2)
+  vendorSpread    Decimal?           @db.Decimal(10, 2)
+  snapshotIds     String[]
+  snapshots       ProductSnapshot[]
+  createdAt       DateTime           @default(now())
+}
+
+model Alert {
+  id                String        @id @default(cuid())
+  userId            String
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  active            Boolean       @default(true)
+  scope             AlertScope
+  ruleType          AlertRuleType
+  targetPrice       Decimal?      @db.Decimal(10, 2)
+  dropPercent       Float?
+  query             String
+  lat               Float
+  lon               Float
+  pincode           String
+  vendors           Vendor[]
+  flipkartHyperlocalOnly Boolean @default(false)
+  groupKey          String?
+  vendorProductIds  Json?
+  productName       String
+  quantity          String?
+  brand             String?
+  ntfyUrl           String?
+  browserPush       Boolean       @default(false)
+  intervalMinutes   Int           @default(30)
+  lastCheckedAt     DateTime?
+  lastMatchedPrice  Decimal?      @db.Decimal(10, 2)
+  baselinePrice     Decimal?      @db.Decimal(10, 2)
+  nextCheckAt       DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  events            AlertEvent[]
+
+  @@index([active, nextCheckAt])
+}
+
+model AlertEvent {
+  id              String         @id @default(cuid())
+  alertId         String
+  alert           Alert          @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matchedPrice    Decimal        @db.Decimal(10, 2)
+  previousPrice   Decimal?       @db.Decimal(10, 2)
+  vendor          Vendor?
+  message         String
+  ntfyStatus      DeliveryStatus?
+  pushStatus      DeliveryStatus?
+  error           String?
+  createdAt       DateTime       @default(now())
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

@@ -2,6 +2,7 @@
 "use strict";
 const { readVendorJson } = require("./scripts/vendor-http");
 const { runPlaywright } = require("./scripts/playwright-runner");
+const { openArguments, isClosedSession } = require("./scripts/browser-sessions");
 
 const crypto = require("crypto");
 const fs = require("fs");
@@ -19,11 +20,25 @@ function readOptionalFile(filename) {
 
 function getAutomatedCookie() {
   try {
-    const stdout = runPlaywright([`-s=${process.env.SWIGGY_PLAYWRIGHT_SESSION || "swiggy_normal"}`, "cookie-list", "--domain=www.swiggy.com"], {
+    const session = process.env.SWIGGY_PLAYWRIGHT_SESSION || "swiggy_normal";
+    const args = [`-s=${session}`, "cookie-list", "--domain=www.swiggy.com"];
+    const options = {
       timeout: 5000,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+      stdio: ["ignore", "pipe", "pipe"],
+    };
+    let stdout;
+    try {
+      stdout = runPlaywright(args, options);
+      if (isClosedSession({ stdout })) throw Object.assign(new Error("Closed browser session"), { stdout });
+    }
+    catch (error) {
+      if (!isClosedSession(error)) throw error;
+      runPlaywright(openArguments(session, `${BASE_URL}/instamart`), {
+        env: { ...process.env, PLAYWRIGHT_MCP_HEADLESS: "true" },
+      });
+      stdout = runPlaywright(args, options);
+    }
     const cookies = stdout
       .trim()
       .split("\n")

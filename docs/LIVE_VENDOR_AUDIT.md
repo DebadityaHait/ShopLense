@@ -376,3 +376,34 @@ Swiggy's successful native HTTP requests through Norway also show that an Indian
 exit is not an absolute requirement for this tested cookie-based search path.
 The rejected Japanese exit remains consistent with exit-IP reputation, regional
 edge behavior, or session effects; these checks do not distinguish them.
+
+## Headless execution verification
+
+The browser launch path now defaults to headless Chrome. `browsers:start` /
+`browsers:stop` manage persistent project-local CLI sessions; `--headed` is an
+explicit desktop setup option, never an automatic scraper fallback. Closed
+catalog/cookie-source sessions are reopened headlessly. Upstream denials do not
+cause session restart loops. Swiggy setup no longer waits on stdin by default
+and refuses to save missing or mismatched delivery-location cookies.
+
+Tests were performed from a connection reporting India. CLI session listings
+confirmed `headed: false`, and Chrome processes included the headless flag.
+
+- Swiggy returned 74 biscuits products across two pages using cookies from
+  headless Chrome, including after importing private session state into the
+  project-local CLI profile.
+- Blinkit's headless browser returned HTTP 403 / an access-denied page.
+- Zepto navigation returned HTTP 429 and a Chrome error page. The catalog
+  adapter therefore could not collect products; this does not isolate headless
+  detection from rate limiting or network effects.
+- A separate headless Patchright test with the saved anonymous state also
+  failed: Blinkit returned HTTP 403, and Zepto navigation failed. Patchright
+  was removed rather than shipped as an unverified workaround.
+- Unattended Swiggy setup without a confirmed location exited with a clear
+  setup error instead of hanging or overwriting saved cookies.
+
+The global and project-local Playwright CLI used different profile directories
+in this environment. Installing the local CLI alone does not migrate existing
+sessions; the startup command supports an explicit private `--state` import.
+No remote Linux VPS deployment was performed in these checks. Initial address
+confirmation and upstream acceptance remain prerequisites for unattended use.

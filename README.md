@@ -269,11 +269,59 @@ Swiggy location cookies can be generated with:
 npm run swiggy:location -- --lat 12.817127 --lon 80.04044 --pincode 603203
 ```
 
-That helper uses Playwright CLI to open Swiggy, grant geolocation permission,
-and set browser geolocation. Address confirmation remains interactive; the
-pincode is not automatically entered into the website. Cookies are saved only
-after a delivery location is present. The tested public catalog flow does not
-require vendor account login.
+That helper uses headless Playwright CLI to open Swiggy, grant geolocation
+permission, and set browser geolocation. It does not wait for terminal input by
+default. If address confirmation is necessary, run it on a desktop with
+`--headed`; the pincode is not automatically entered into the website. Cookies
+are saved only after the session's delivery coordinates match the requested
+location. The tested public catalog flow does not require vendor account login.
+
+### Headless VPS Execution
+
+Browser-backed scraping does not open visible windows by default. The project
+includes Playwright CLI as a runtime dependency; install Chrome and its Linux
+dependencies once, then start persistent headless sessions:
+
+```bash
+npm ci
+npx playwright install --with-deps chrome
+npm run browsers:start
+npm run start
+# Separate process for scheduled alert checks:
+npm run worker
+```
+
+Use Node.js 22 LTS. Run services under the same non-root Linux user and repository
+directory so they can locate the same persistent CLI profiles. Session startup
+does not guarantee a valid delivery location or upstream acceptance. Closed/idle
+sessions are reopened headlessly when needed; blocked sessions do not trigger a
+visible-browser fallback. `npm run browsers:stop` stops the project-local sessions.
+
+For first-time address confirmation on a desktop only:
+
+```bash
+npm run browsers:start -- --vendors ZEPTO --headed
+npm run swiggy:location -- --lat 12.817127 --lon 80.04044 --pincode 603203 --headed
+```
+
+For a private storage-state export from that desktop session:
+
+```bash
+npx playwright-cli -s=zepto_normal state-save .playwright-cli/zepto-state.json
+# Securely transfer the file to the VPS, then import it without a visible window:
+npm run browsers:start -- --vendors ZEPTO --state .playwright-cli/zepto-state.json
+```
+
+Treat state exports as secrets and never commit them. Session transfer across
+machines or IPs can require renewal. CLI installation/version changes can also
+select a different profile directory; importing state is preferable to assuming
+the global and project-local CLI share profiles.
+
+Live headless verification currently passed Swiggy search (74 products across
+two pages), but Blinkit returned HTTP 403 and Zepto returned HTTP 429 in this
+environment. Patchright was tested separately and did not repair those denials,
+so it is not included as a purported fix. Headless-compatible execution is not
+a guarantee that every marketplace will accept a particular VPS/network.
 
 ## System Components
 

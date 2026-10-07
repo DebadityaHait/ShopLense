@@ -8,6 +8,8 @@
     "start": "next start",
     "worker": "node scripts/alert-worker.js",
     "swiggy:location": "node scripts/swiggy-location-cookie.js",
+    "browsers:start": "node scripts/browser-sessions.js",
+    "browsers:stop": "node scripts/browser-sessions.js --stop",
     "check:vendors": "node scripts/check-vendors.js",
     "prisma:migrate": "prisma migrate dev",
     "test": "vitest run",
@@ -15,6 +17,7 @@
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.10.0",
+    "@playwright/cli": "^0.1.22",
     "@prisma/client": "^6.8.0",
     "bcryptjs": "^3.0.2",
     "lucide-react": "^0.511.0",

@@ -1,6 +1,7 @@
 "use strict";
 
 const { runPlaywrightAsync } = require("./playwright-runner");
+const { openArguments, sessionUrl, isClosedSession } = require("./browser-sessions");
 const sessions = new Map();
 
 function parseCliResult(stdout) {
@@ -13,7 +14,21 @@ async function runCatalogCode(session, code) {
   // A persistent browser tab is shared mutable state; serialize reads within this process.
   const previous = sessions.get(session) || Promise.resolve();
   const next = previous.catch(() => {}).then(async () => {
-    const result = parseCliResult(await runPlaywrightAsync([`-s=${session}`, "run-code", code]));
+    const args = [`-s=${session}`, "run-code", code];
+    let stdout;
+    try {
+      stdout = await runPlaywrightAsync(args);
+      if (isClosedSession({ stdout })) throw Object.assign(new Error("Closed browser session"), { stdout });
+    }
+    catch (error) {
+      const url = sessionUrl(session);
+      if (!url || !isClosedSession(error)) throw new Error("Browser operation failed. Check the headless session and delivery location; no headed fallback was attempted.");
+      await runPlaywrightAsync(openArguments(session, url), {
+        env: { ...process.env, PLAYWRIGHT_MCP_HEADLESS: "true" },
+      });
+      stdout = await runPlaywrightAsync(args);
+    }
+    const result = parseCliResult(stdout);
     if (result.error) throw new Error(result.error);
     return result;
   });

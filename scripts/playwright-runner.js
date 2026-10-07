@@ -6,6 +6,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 function resolvePlaywrightCommand(bin = process.env.PLAYWRIGHT_CLI || "playwright-cli") {
+  if (!process.env.PLAYWRIGHT_CLI && bin === "playwright-cli") {
+    const local = path.resolve(__dirname, "..", "node_modules", "@playwright", "cli", "playwright-cli.js");
+    if (fs.existsSync(local)) return [process.execPath, [local]];
+  }
   if (bin.endsWith(".js")) return [process.execPath, [bin]];
   // Windows cannot exec npm's .cmd/.ps1 wrappers directly. Run their JS entrypoint without a shell.
   if (process.platform === "win32" && /^playwright-cli(?:\.cmd|\.ps1)?$/i.test(path.basename(bin))) {

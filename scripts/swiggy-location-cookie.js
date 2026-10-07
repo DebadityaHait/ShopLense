@@ -2,6 +2,7 @@
 "use strict";
 
 const { runPlaywright } = require("./playwright-runner");
+const { openArguments } = require("./browser-sessions");
 const fs = require("fs");
 const path = require("path");
 
@@ -32,6 +33,8 @@ function parseArgs(argv) {
     } else if (arg === "--session") {
       args.session = next;
       i += 1;
+    } else if (arg === "--headed") {
+      args.headed = true;
     }
   }
 
@@ -58,30 +61,44 @@ async function main() {
   const origin = "https://www.swiggy.com";
   const url = `${origin}/instamart/search?custom_back=true&query=${encodeURIComponent(args.query)}`;
 
-  runPlaywright([sessionArg, "open", "--browser=chrome", "--headed", "--persistent", origin], { stdio: "inherit" });
+  runPlaywright([sessionArg, "close"]);
+  runPlaywright(openArguments(args.session, "about:blank", args.headed), {
+    env: { ...process.env, PLAYWRIGHT_MCP_HEADLESS: args.headed ? "false" : "true" },
+  });
   runPlaywright([
     sessionArg,
     "run-code",
     `async page => {
       await page.context().grantPermissions(['geolocation'], { origin: '${origin}' });
       await page.context().setGeolocation({ latitude: ${Number(args.lat)}, longitude: ${Number(args.lon)} });
-      await page.goto(${JSON.stringify(url)});
+      await page.goto('${origin}/instamart', { waitUntil: 'domcontentloaded', timeout: 15000 });
       const share = page.getByRole('button', { name: /Share location|Use current location/ }).first();
-      if (await share.isVisible().catch(() => false)) await share.click();
+      const visible = await share.waitFor({state:'visible',timeout:3000}).then(()=>true).catch(()=>false);
+      if (visible) await share.click();
+      await page.goto(${JSON.stringify(url)}, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const cookies = await page.context().cookies('${origin}');
+        if (cookies.some(c => c.name === 'lat') && cookies.some(c => c.name === 'lng')) break;
+        await page.waitForTimeout(250);
+      }
     }`,
   ]);
 
-  console.log("");
-  console.log("If Swiggy asks for an address, select the address/pincode in the opened browser, then press Enter here.");
-  process.stdin.resume();
-  await new Promise((resolve) => process.stdin.once("data", resolve));
-  process.stdin.pause();
+  if (args.headed) {
+    if (!process.stdin.isTTY) throw new Error("Interactive setup needs a terminal. Omit --headed for unattended setup.");
+    console.log("Select the matching delivery address in the browser, then press Enter here.");
+    process.stdin.resume();
+    await new Promise((resolve) => process.stdin.once("data", resolve));
+    process.stdin.pause();
+  }
 
   const cookies = cookieString(runPlaywright([sessionArg, "cookie-list", "--domain=www.swiggy.com"]));
   if (!cookies) throw new Error("No Swiggy cookies were captured. Confirm the Playwright browser has a selected Swiggy delivery location.");
   if (!/(?:^|;\s*)lat=/.test(cookies) || !/(?:^|;\s*)lng=/.test(cookies)) {
-    throw new Error("Swiggy has not saved a delivery location. Select a location and rerun setup; no cookie file was overwritten.");
+    throw new Error("Swiggy has not saved a delivery location. Run setup with --headed on a desktop for address confirmation; no cookie file was overwritten.");
   }
+  require("../swiggy_scraper").validateLocation(cookies, Number(args.lat), Number(args.lon));
 
   fs.writeFileSync(path.join(process.cwd(), "swiggy_cookie.txt"), cookies);
   fs.writeFileSync(
@@ -91,7 +108,9 @@ async function main() {
   console.log("Saved swiggy_cookie.txt and swiggy_location.json");
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message);
+if (require.main === module) main().catch((error) => {
+  console.error(error.message);
   process.exitCode = 1;
 });
+
+module.exports = { parseArgs, cookieString };

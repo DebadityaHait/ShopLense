@@ -415,6 +415,27 @@ npm run swiggy:location -- --lat <lat> --lon <lon> --pincode <pin>
 
 ## Deployment Notes
 
+### Network and IP Reputation
+
+Marketplace access can vary with the outbound IP and network. A scraper that
+works locally may be rejected from a VPN or cloud-hosted VPS, even with the same
+delivery location and request format. IP reputation is a possible factor;
+regional filtering, automated-browser detection, and session/IP binding can
+also affect access. Changing the runtime to headless does not resolve these
+network restrictions by itself.
+
+In live tests, the previously working adapters returned products from a direct
+Indian connection and a Norwegian VPN exit. Zepto and Swiggy failed through the
+tested Japanese VPN exit, then recovered on the Indian connection; Swiggy also
+needed session refreshes. These observations do **not** prove IP reputation was
+the sole cause, or that an Indian IP is required. Separate headless tests still
+encountered Blinkit HTTP 403 and Zepto HTTP 429 responses.
+
+Validate searches and session renewal from the actual deployment host before
+claiming compatibility. Surface upstream failures as partial vendor errors
+rather than interpreting blocked responses as empty inventory or out-of-stock
+products. See [Live Vendor Audit](docs/LIVE_VENDOR_AUDIT.md) for the test details.
+
 ShopLense can run as:
 
 - web app on Render/Vercel/Node hosting;

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 "use strict";
+const { readVendorJson } = require("./scripts/vendor-http");
+const { runPlaywright } = require("./scripts/playwright-runner");
 
 const crypto = require("crypto");
 const fs = require("fs");
@@ -17,8 +19,8 @@ function readOptionalFile(filename) {
 
 function getAutomatedCookie() {
   try {
-    const { execSync } = require("child_process");
-    const stdout = execSync("playwright-cli -s=swiggy_normal cookie-list --domain=www.swiggy.com", {
+    const stdout = runPlaywright([`-s=${process.env.SWIGGY_PLAYWRIGHT_SESSION || "swiggy_normal"}`, "cookie-list", "--domain=www.swiggy.com"], {
+      timeout: 5000,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -58,6 +60,9 @@ function parseArgs(argv) {
     } else if (arg === "--matcher") {
       args.matcher = next;
       i += 1;
+    } else if (arg === "--build-version") {
+      args.buildVersion = next;
+      i += 1;
     }
   }
 
@@ -76,7 +81,8 @@ function parseArgs(argv) {
 function resolveSwiggyOptions(options = {}) {
   const cookie = options.cookie || process.env.SWIGGY_COOKIE || readOptionalFile("swiggy_cookie.txt") || getAutomatedCookie();
   const deviceId = options.deviceId || process.env.SWIGGY_DEVICE_ID || (cookie ? extractDeviceId(cookie) : "") || crypto.randomUUID();
-  const matcher = options.matcher || process.env.SWIGGY_MATCHER || readOptionalFile("swiggy_matcher.txt");
+  // A historical matcher file can invalidate an otherwise healthy anonymous session.
+  const matcher = options.matcher || process.env.SWIGGY_MATCHER;
 
   return {
     ...options,
@@ -85,12 +91,37 @@ function resolveSwiggyOptions(options = {}) {
     cookie,
     deviceId,
     matcher,
+    buildVersion: options.buildVersion || process.env.SWIGGY_BUILD_VERSION || "2.381.0",
   };
 }
 
 function extractDeviceId(cookie) {
   const match = cookie.match(/(?:^|;\s*)deviceId=s%3A([^.;]+)/);
   return match ? decodeURIComponent(match[1]) : null;
+}
+
+function validateLocation(cookie, lat, lon) {
+  if (lat == null || lon == null) return;
+  function coordinate(name) {
+    const value = cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1];
+    try {
+      if (value == null) return NaN;
+      let decoded = decodeURIComponent(value);
+      if (decoded.startsWith("s:")) {
+        const separator = decoded.lastIndexOf(".");
+        if (separator <= 2) return NaN;
+        decoded = decoded.slice(2, separator);
+      }
+      return Number(decoded);
+    }
+    catch { return NaN; }
+  }
+  const selectedLat = coordinate("lat");
+  const selectedLon = coordinate("lng");
+  if (!Number.isFinite(selectedLat) || !Number.isFinite(selectedLon) ||
+      Math.abs(selectedLat - lat) > 0.001 || Math.abs(selectedLon - lon) > 0.001) {
+    throw new Error("Swiggy browser delivery location differs from the search coordinates. Select the matching location in swiggy_normal before comparing prices.");
+  }
 }
 
 function buildUrl(offset) {
@@ -105,18 +136,18 @@ function buildUrl(offset) {
   return `${SEARCH_URL}?${params.toString()}`;
 }
 
-function buildBody(query, offset) {
+function buildBody(query, resultsOffset) {
   return {
     facets: [],
     sortAttribute: "",
     query,
-    search_results_offset: String(offset),
+    search_results_offset: String(resultsOffset),
     page_type: "INSTAMART_SEARCH_PAGE",
     is_pre_search_tag: false,
   };
 }
 
-async function fetchSearchPage({ query, offset, cookie, deviceId, matcher }) {
+async function fetchSearchPage({ query, offset, resultsOffset, cookie, deviceId, matcher, buildVersion }) {
   const ua =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -126,7 +157,7 @@ async function fetchSearchPage({ query, offset, cookie, deviceId, matcher }) {
     origin: BASE_URL,
     referer: `${BASE_URL}/instamart/search?custom_back=true&query=${encodeURIComponent(query)}`,
     "user-agent": ua,
-    "x-build-version": "2.341.0",
+    "x-build-version": buildVersion,
     "x-device-id": deviceId,
     cookie,
   };
@@ -135,23 +166,13 @@ async function fetchSearchPage({ query, offset, cookie, deviceId, matcher }) {
   const response = await fetch(buildUrl(offset), {
     method: "POST",
     headers,
-    body: JSON.stringify(buildBody(query, offset)),
+    body: JSON.stringify(buildBody(query, resultsOffset)),
+    signal: AbortSignal.timeout(15000),
   });
 
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`Swiggy search failed: HTTP ${response.status} ${text}`);
-  }
-  if (!text) {
-    throw new Error("Swiggy returned an empty response. Refresh browser cookies; WAF likely blocked or expired.");
-  }
-
-  const payload = JSON.parse(text);
-  if (payload.statusCode && payload.statusCode !== 0) {
-    throw new Error(`Swiggy search failed: ${JSON.stringify(payload)}`);
-  }
-  if (payload.statusCode === "ERR_NON_2XX_3XX_RESPONSE") {
-    throw new Error("Swiggy rejected the request. Confirm the cookie contains signed location cookies and aws-waf-token.");
+  const payload = await readVendorJson(response, "Swiggy search");
+  if (payload.statusCode != null && String(payload.statusCode) !== "0") {
+    throw new Error("Swiggy rejected the search session. Refresh the normal browser session and confirm its location.");
   }
   return payload;
 }
@@ -254,31 +275,37 @@ function normalizeProduct(item, query, sla) {
 }
 
 async function scrapeSwiggy(options) {
-  options = resolveSwiggyOptions(options);
+  options = resolveSwiggyOptions({ pages: 1, ...options });
   if (!options.cookie) {
     throw new Error("Swiggy requires browser cookies with location and aws-waf-token. Open swiggy_normal in Playwright CLI or set SWIGGY_COOKIE.");
   }
+  validateLocation(options.cookie, options.lat, options.lon);
 
   const products = [];
   let total = null;
   let sla = null;
   let offset = 0;
+  let resultsOffset = "0";
 
   for (let page = 1; page <= options.pages; page += 1) {
     const payload = await fetchSearchPage({
       query: options.query,
       offset,
+      resultsOffset,
       cookie: options.cookie,
       deviceId: options.deviceId,
       matcher: options.matcher,
+      buildVersion: options.buildVersion,
     });
     total ??= totalResults(payload);
     sla ??= serviceSla(payload);
     products.push(...extractItems(payload).map((item) => normalizeProduct(item, options.query, sla)));
 
-    const nextOffset = Number(payload?.data?.pageOffset?.nextOffset);
-    if (!Number.isFinite(nextOffset) || nextOffset === offset) break;
+    const cursor = payload?.data?.pageOffset?.nextOffset;
+    const nextOffset = cursor == null || cursor === "" ? NaN : Number(cursor);
+    if (!Number.isFinite(nextOffset) || nextOffset <= offset) break;
     offset = nextOffset;
+    resultsOffset = String(payload?.data?.searchResultsOffset ?? "");
   }
 
   const seen = new Set();
@@ -307,4 +334,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { scrapeSwiggy, getAutomatedCookie, resolveSwiggyOptions };
+module.exports = { scrapeSwiggy, getAutomatedCookie, resolveSwiggyOptions, validateLocation };

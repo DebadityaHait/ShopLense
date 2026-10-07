@@ -2,11 +2,13 @@
 "use strict";
 
 const crypto = require("crypto");
+const { readVendorJson } = require("./scripts/vendor-http");
+const { searchZeptoBrowser } = require("./scripts/browser-catalog");
 
 const SEARCH_URL =
-  "https://bff-gateway.zeptonow.com/user-search-service/api/v3/search";
+  "https://bff-gateway.zepto.com/user-search-service/api/v3/search";
 const SERVICEABILITY_URL =
-  "https://bff-gateway.zeptonow.com/serviceability-service/api/v1/serviceability";
+  "https://bff-gateway.zepto.com/serviceability-service/api/v1/serviceability";
 const SEARCH_PATH = "/user-search-service/api/v3/search";
 const SERVICEABILITY_PATH = "/serviceability-service/api/v1/serviceability";
 const PRODUCT_DETAIL_PATH = "/product-assortment-service/api/v2/product-detail";
@@ -44,6 +46,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--request-id") {
       args.requestId = next;
+      i += 1;
+    } else if (arg === "--transport") {
+      args.transport = next;
       i += 1;
     }
   }
@@ -110,9 +115,16 @@ function quantity(productVariant) {
 
 function productItems(payload) {
   const widgets = Array.isArray(payload?.layout) ? payload.layout : [];
+  function collect(items) {
+    return items.flatMap((item) => {
+      const response = item?.productResponse || item;
+      if (response?.product && response?.productVariant) return [item];
+      return Array.isArray(item?.items) ? collect(item.items) : [];
+    });
+  }
   return widgets.flatMap((widget) => {
     const items = widget?.data?.resolver?.data?.items;
-    return Array.isArray(items) ? items : [];
+    return Array.isArray(items) ? collect(items) : [];
   });
 }
 
@@ -182,6 +194,7 @@ async function resolveStore({ lat, lon, requestId, deviceId, sessionId }) {
 
   const response = await fetch(`${SERVICEABILITY_URL}${query}`, {
     method: "GET",
+    signal: AbortSignal.timeout(5000),
     headers: {
       accept: "application/json",
       requestId,
@@ -205,12 +218,7 @@ async function resolveStore({ lat, lon, requestId, deviceId, sessionId }) {
     },
   });
 
-  if (!response.ok) {
-    storeCache.set(key, DEFAULT_STORE_ID);
-    return DEFAULT_STORE_ID;
-  }
-
-  const payload = await response.json();
+  const payload = await readVendorJson(response, "Zepto serviceability");
   const primaryStore =
     payload?.data?.stores?.find((store) => store?.serviceable && store?.storeConstruct === "PRIMARY_STORE") ||
     payload?.data?.stores?.find((store) => store?.serviceable) ||
@@ -267,14 +275,10 @@ async function fetchPage({ query, pageNumber, requestId, deviceId, sessionId, la
     method: "POST",
     headers,
     body,
+    signal: AbortSignal.timeout(5000),
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Zepto search failed: HTTP ${response.status} ${text}`);
-  }
-
-  return response.json();
+  return readVendorJson(response, "Zepto search");
 }
 
 async function fetchProductDetail({ productVariantId, requestId, deviceId, sessionId, storeId }) {
@@ -287,7 +291,7 @@ async function fetchProductDetail({ productVariantId, requestId, deviceId, sessi
     body: "",
   });
 
-  const response = await fetch(`https://bff-gateway.zeptonow.com${path}`, {
+  const response = await fetch(`https://bff-gateway.zepto.com${path}`, {
     method: "GET",
     headers: {
       accept: "application/json",
@@ -331,7 +335,8 @@ function dedupeProducts(products) {
   });
 }
 
-async function scrapeZepto(options) {
+async function scrapeZeptoHttp(options) {
+  options = { pages: 1, ...options };
   const requestId = options.requestId || uuidLike(`${Date.now()}:request`);
   const deviceId = uuidLike(`${requestId}:device`);
   const sessionId = uuidLike(`${requestId}:session`);
@@ -384,6 +389,27 @@ async function scrapeZepto(options) {
   };
 }
 
+async function scrapeZepto(options) {
+  options = { pages: 1, ...options };
+  const transport = options.transport || process.env.ZEPTO_TRANSPORT || "auto";
+  if (!["auto", "http", "browser"].includes(transport)) throw new Error("Invalid Zepto transport");
+  if (transport !== "browser") {
+    try { return await scrapeZeptoHttp(options); }
+    catch (error) { if (transport === "http") throw error; }
+  }
+  const result = await searchZeptoBrowser(options);
+  const products = dedupeProducts(result.payloads.flatMap(payload => productItems(payload).map(normalizeProduct)));
+  if (options.productVariantId && !products.some(product => product.id === options.productVariantId)) {
+    throw new Error("The exact Zepto product was not returned by browser search. Its stock cannot be inferred from search absence.");
+  }
+  return { status: "success", data: {
+    query: options.query, platform: "Zepto", store_id: result.storeId, transport: "browser",
+    location_source: "browser-session",
+    lat: result.location?.latitude, lon: result.location?.longitude,
+    total_results: result.payloads[0]?.totalProductCount || products.length, products,
+  } };
+}
+
 if (require.main === module) {
   scrapeZepto(parseArgs(process.argv.slice(2)))
     .then((result) => {
@@ -395,4 +421,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { scrapeZepto, resolveStore, fetchProductDetail };
+module.exports = { scrapeZepto, resolveStore, fetchProductDetail, productItems, normalizeProduct };

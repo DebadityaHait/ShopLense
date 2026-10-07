@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 "use strict";
+const { readVendorJson } = require("./scripts/vendor-http");
+const { fetchBlinkitBrowser } = require("./scripts/browser-catalog");
 
 const crypto = require("crypto");
 
 const BASE_URL = "https://blinkit.com";
 const SEARCH_PATH = "/v1/layout/search";
-const APP_VERSION = "52434332";
+const APP_VERSION = "1010101010";
 const PLATFORM_ICON = "https://d2chhaxkq6tvay.cloudfront.net/platforms/blinkit.webp";
 
 function parseArgs(argv) {
@@ -34,6 +36,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--size") {
       args.size = Math.max(1, Number(next) || 20);
+      i += 1;
+    } else if (arg === "--transport") {
+      args.transport = next;
       i += 1;
     }
   }
@@ -168,18 +173,17 @@ async function fetchSearch({ url, query, lat, lon, size, postbackParams, cookie 
       ...(cookie ? { cookie } : {}),
     },
     body,
+    signal: AbortSignal.timeout(5000),
   });
 
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`Blinkit search failed: HTTP ${response.status} ${text}`);
-  }
-
   const nextCookie = response.headers.get("set-cookie") || "";
-  return { payload: JSON.parse(text), cookie: nextCookie };
+  return { payload: await readVendorJson(response, "Blinkit search"), cookie: nextCookie };
 }
 
 async function scrapeBlinkit(options) {
+  options = { pages: 1, size: 20, ...options };
+  let transport = options.transport || process.env.BLINKIT_TRANSPORT || "auto";
+  if (!["auto", "http", "browser"].includes(transport)) throw new Error("Invalid Blinkit transport");
   let nextUrl = null;
   let postbackParams = null;
   let cookie = `gr_1_deviceId=${uuidLike(`${options.lat}:${options.lon}:${options.query}`)}`;
@@ -187,7 +191,7 @@ async function scrapeBlinkit(options) {
   let totalResults = 0;
 
   for (let page = 0; page < options.pages; page += 1) {
-    const { payload, cookie: responseCookie } = await fetchSearch({
+    const request = {
       url: nextUrl,
       query: options.query,
       lat: options.lat,
@@ -195,7 +199,19 @@ async function scrapeBlinkit(options) {
       size: options.size,
       postbackParams,
       cookie,
-    });
+      session: options.session,
+    };
+    let response;
+    if (transport === "browser") response = await fetchBlinkitBrowser(request);
+    else {
+      try { response = await fetchSearch(request); }
+      catch (error) {
+        if (transport === "http") throw error;
+        response = await fetchBlinkitBrowser(request);
+        transport = "browser";
+      }
+    }
+    const { payload, cookie: responseCookie } = response;
 
     if (responseCookie) {
       cookie = responseCookie
@@ -228,6 +244,7 @@ async function scrapeBlinkit(options) {
     lon: options.lon,
     total_results: totalResults || uniqueProducts.length,
     products: uniqueProducts,
+    transport: transport === "auto" ? "http" : transport,
   };
 }
 

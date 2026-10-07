@@ -205,6 +205,13 @@ Zepto required the most request reconstruction:
 - CDN image URL reconstruction;
 - deduplication by product variant id.
 
+The current search adapter supports `auto`, `http`, and `browser` transports.
+Browser mode observes the website's structured search responses in an existing
+location-set Playwright session and extracts products from nested promotional
+containers. It rejects mismatched session coordinates. Exact-product detail
+tracking remains an HTTP path; the browser fallback does not infer out-of-stock
+status from a product missing in search.
+
 ### Blinkit
 
 File: [`blinkit_scraper.js`](blinkit_scraper.js)
@@ -215,6 +222,10 @@ Blinkit search returns UI snippets rather than a clean product list. The scraper
 - extracts `product_card_snippet_type_2` widgets;
 - handles pagination via `next_url` and `postback_params`;
 - derives product ids, merchant ids, prices, inventory, ETA, and deeplinks.
+
+When direct HTTP is rejected, auto mode can use browser-context HTTP requests
+from an existing anonymous, location-set session. The same normalization and
+pagination logic applies to both transports.
 
 ### Flipkart
 
@@ -229,6 +240,10 @@ Flipkart uses a page fetch API with page context and location context. The scrap
 - extracts `PRODUCT_SUMMARY` slots;
 - reconstructs product links and image URLs.
 
+Regular Flipkart is verified through native Node HTTP. The tested Minutes path
+currently returns a location/address gate, surfaced as an explicit vendor error
+rather than a successful empty catalog.
+
 ### Swiggy Instamart
 
 File: [`swiggy_scraper.js`](swiggy_scraper.js)
@@ -241,13 +256,24 @@ Swiggy depends on browser session state. The scraper:
 - handles variation selection;
 - uses Instamart product ids for canonical item URLs.
 
+Search itself uses native Node HTTP, not browser navigation. Cookies can also
+be read from an active Playwright session; browser setup or renewal is separate
+from the search requests. Pagination carries both the page offset and the
+search-results cursor, and callers supplying coordinates are checked against
+the session's saved location. A historical matcher file is not loaded
+implicitly because stale values can invalidate otherwise healthy sessions.
+
 Swiggy location cookies can be generated with:
 
 ```bash
 npm run swiggy:location -- --lat 12.817127 --lon 80.04044 --pincode 603203
 ```
 
-That helper uses Playwright CLI to open Swiggy, grant geolocation permission, set browser geolocation, and save cookies.
+That helper uses Playwright CLI to open Swiggy, grant geolocation permission,
+and set browser geolocation. Address confirmation remains interactive; the
+pincode is not automatically entered into the website. Cookies are saved only
+after a delivery location is present. The tested public catalog flow does not
+require vendor account login.
 
 ## System Components
 
@@ -347,12 +373,20 @@ ShopLense can run as:
 - Postgres on Neon or Render Postgres;
 - background worker on Render Worker or a VPS.
 
-Vercel is suitable for the dashboard and APIs, but the alert worker and Swiggy cookie setup are better suited to Render or a VPS because they need a long-running process and, in Swiggy’s case, occasional browser-session maintenance.
+Vercel can host the dashboard and HTTP-only paths. The current browser-assisted
+Zepto/Blinkit transports, Swiggy session setup, and alert worker need a long-running
+host such as Render or a VPS, or a separate browser service. See the live audit
+for the current session and location constraints.
 
 ## Testing
 
+Current live integration results and browser-session requirements are documented
+in [Live Vendor Audit](docs/LIVE_VENDOR_AUDIT.md). Zepto and Blinkit can fall back
+to established Playwright sessions; Swiggy uses anonymous location cookies.
+
 ```bash
 npm test
+npm run check:vendors
 npx tsc --noEmit
 npm run build
 ```

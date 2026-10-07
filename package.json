@@ -8,6 +8,7 @@
     "start": "next start",
     "worker": "node scripts/alert-worker.js",
     "swiggy:location": "node scripts/swiggy-location-cookie.js",
+    "check:vendors": "node scripts/check-vendors.js",
     "prisma:migrate": "prisma migrate dev",
     "test": "vitest run",
     "test:watch": "vitest"

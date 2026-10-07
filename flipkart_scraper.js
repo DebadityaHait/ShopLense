@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const { readVendorJson } = require("./scripts/vendor-http");
 
 const crypto = require("crypto");
 
@@ -120,11 +121,7 @@ async function fetchPage({ query, pincode, marketplace, page, paginationContextM
     body,
   });
 
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`Flipkart search failed: HTTP ${response.status} ${text}`);
-  }
-  return JSON.parse(text);
+  return readVendorJson(response, "Flipkart search");
 }
 
 function productCards(payload) {
@@ -196,6 +193,7 @@ function normalizeProduct(card) {
 }
 
 async function scrapeFlipkart(options) {
+  options = { pages: 1, ...options };
   let marketplace = options.marketplace;
   const ssid = uuidLike(`${options.query}:${options.pincode}:${Date.now()}`).replaceAll("-", "").slice(0, 24);
   let firstPayload = await fetchPage({
@@ -216,6 +214,10 @@ async function scrapeFlipkart(options) {
       page: 1,
       ssid,
     });
+  }
+
+  if (firstPayload?.RESPONSE?.pageMeta?.redirectionObject) {
+    throw new Error("Flipkart returned a location/address gate instead of products. Minutes availability could not be confirmed for this pincode.");
   }
 
   const products = productCards(firstPayload).map(normalizeProduct);

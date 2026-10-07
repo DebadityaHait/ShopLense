@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-const { execFileSync } = require("child_process");
+const { runPlaywright } = require("./playwright-runner");
 const fs = require("fs");
 const path = require("path");
 
@@ -35,18 +35,12 @@ function parseArgs(argv) {
     }
   }
 
-  if (!Number.isFinite(Number(args.lat)) || !Number.isFinite(Number(args.lon))) {
+  if (args.lat == null || args.lon == null || String(args.lat).trim() === "" || String(args.lon).trim() === "" ||
+      !Number.isFinite(Number(args.lat)) || Math.abs(Number(args.lat)) > 90 ||
+      !Number.isFinite(Number(args.lon)) || Math.abs(Number(args.lon)) > 180) {
     throw new Error("Usage: npm run swiggy:location -- --lat 12.817127 --lon 80.04044 --pincode 603203");
   }
   return args;
-}
-
-function runPlaywright(args, options = {}) {
-  const bin = process.env.PLAYWRIGHT_CLI || "playwright-cli";
-  return execFileSync(bin, args, {
-    encoding: "utf8",
-    stdio: options.stdio || ["ignore", "pipe", "pipe"],
-  });
 }
 
 function cookieString(stdout) {
@@ -64,16 +58,18 @@ async function main() {
   const origin = "https://www.swiggy.com";
   const url = `${origin}/instamart/search?custom_back=true&query=${encodeURIComponent(args.query)}`;
 
-  runPlaywright([sessionArg, "open", "--browser=chrome", "--persistent", origin], { stdio: "inherit" });
+  runPlaywright([sessionArg, "open", "--browser=chrome", "--headed", "--persistent", origin], { stdio: "inherit" });
   runPlaywright([
     sessionArg,
     "run-code",
     `async page => {
       await page.context().grantPermissions(['geolocation'], { origin: '${origin}' });
       await page.context().setGeolocation({ latitude: ${Number(args.lat)}, longitude: ${Number(args.lon)} });
+      await page.goto(${JSON.stringify(url)});
+      const share = page.getByRole('button', { name: /Share location|Use current location/ }).first();
+      if (await share.isVisible().catch(() => false)) await share.click();
     }`,
   ]);
-  runPlaywright([sessionArg, "goto", url], { stdio: "inherit" });
 
   console.log("");
   console.log("If Swiggy asks for an address, select the address/pincode in the opened browser, then press Enter here.");
@@ -82,7 +78,10 @@ async function main() {
   process.stdin.pause();
 
   const cookies = cookieString(runPlaywright([sessionArg, "cookie-list", "--domain=www.swiggy.com"]));
-  if (!cookies) throw new Error("No Swiggy cookies were captured. Confirm the Playwright browser is logged into/location-set on Swiggy.");
+  if (!cookies) throw new Error("No Swiggy cookies were captured. Confirm the Playwright browser has a selected Swiggy delivery location.");
+  if (!/(?:^|;\s*)lat=/.test(cookies) || !/(?:^|;\s*)lng=/.test(cookies)) {
+    throw new Error("Swiggy has not saved a delivery location. Select a location and rerun setup; no cookie file was overwritten.");
+  }
 
   fs.writeFileSync(path.join(process.cwd(), "swiggy_cookie.txt"), cookies);
   fs.writeFileSync(

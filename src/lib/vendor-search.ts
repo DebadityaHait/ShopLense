@@ -24,13 +24,18 @@ export type SearchVendorsInput = {
   loaders?: Partial<Record<Vendor, () => (options: Record<string, unknown>) => Promise<unknown>>>;
 };
 
-function timeout<T>(promise: Promise<T>, ms: number, label: string) {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    }),
-  ]);
+async function timeout<T>(promise: Promise<T>, ms: number, label: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function toNumber(value: unknown) {
@@ -138,6 +143,8 @@ async function runVendor(vendor: Vendor, input: SearchVendorsInput): Promise<Ven
         : vendor === "SWIGGY"
           ? {
               ...baseOptions,
+              lat: input.lat,
+              lon: input.lon,
               ...(process.env.SWIGGY_COOKIE ? { cookie: process.env.SWIGGY_COOKIE } : {}),
               ...(process.env.SWIGGY_DEVICE_ID ? { deviceId: process.env.SWIGGY_DEVICE_ID } : {}),
               ...(process.env.SWIGGY_MATCHER ? { matcher: process.env.SWIGGY_MATCHER } : {}),

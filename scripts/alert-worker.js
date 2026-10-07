@@ -30,6 +30,8 @@ const vendorScrapers = {
   SWIGGY: (alert) =>
     scrapeSwiggy({
       query: alert.query,
+      lat: alert.lat,
+      lon: alert.lon,
       pages: 1,
       ...(process.env.SWIGGY_COOKIE ? { cookie: process.env.SWIGGY_COOKIE } : {}),
       ...(process.env.SWIGGY_DEVICE_ID ? { deviceId: process.env.SWIGGY_DEVICE_ID } : {}),

@@ -1,7 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { searchVendors } from "./vendor-search";
 
 describe("vendor search", () => {
+  it("clears the timeout timer after a successful request", async () => {
+    vi.useFakeTimers();
+    try {
+      await searchVendors({
+        query: "biscuits", lat: 12, lon: 80, pincode: "603203", vendors: ["BLINKIT"],
+        loaders: { BLINKIT: () => async () => ({ products: [] }) },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a hanging vendor as a partial failure after its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = searchVendors({
+        query: "biscuits", lat: 12, lon: 80, pincode: "603203", vendors: ["BLINKIT"], timeoutMs: 50,
+        loaders: { BLINKIT: () => () => new Promise(() => {}) },
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect((await pending).errors).toEqual([{ vendor: "BLINKIT", message: "BLINKIT timed out after 50ms" }]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns partial failures without dropping successful products", async () => {
     const result = await searchVendors({
       query: "chicken",
